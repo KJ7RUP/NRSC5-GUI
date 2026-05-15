@@ -1,0 +1,944 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>HD Radio</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
+<style>
+/* ── Reset & base ─────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:        #0d0f14;
+  --surface:   #161a24;
+  --surface2:  #1e2330;
+  --surface3:  #252c3d;
+  --accent:    #3b82f6;      /* blue  — HD buttons */
+  --analog:    #10b981;      /* green — Analog button */
+  --analog-dim:#064e3b;
+  --success:   #22c55e;
+  --warn:      #f59e0b;
+  --danger:    #ef4444;
+  --text:      #e8eaf0;
+  --muted:     #6b7280;
+  --border:    #2a3045;
+  --radius:    12px;
+  --radius-sm: 6px;
+  --glow-blue: 0 0 20px rgba(59,130,246,0.2);
+  --glow-grn:  0 0 20px rgba(16,185,129,0.2);
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Header ──────────────────────────────────────────────────── */
+header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 20px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+
+.logo {
+  display: flex; align-items: center; gap: 9px;
+  font-size: 1rem; font-weight: 700; letter-spacing: .04em;
+  color: var(--text); flex-shrink: 0;
+}
+.logo svg { color: var(--accent); }
+
+/* ── Tune bar ────────────────────────────────────────────────── */
+.tune-bar {
+  display: flex; align-items: center; gap: 8px;
+  flex: 1; min-width: 0;
+}
+
+.freq-wrap {
+  position: relative; flex-shrink: 0; width: 140px;
+}
+.freq-wrap input {
+  width: 100%;
+  background: var(--surface2);
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 1.1rem; font-weight: 600;
+  padding: 7px 46px 7px 12px;
+  outline: none;
+  transition: border-color .2s, box-shadow .2s;
+}
+.freq-wrap input:focus {
+  border-color: var(--accent);
+  box-shadow: var(--glow-blue);
+}
+.freq-unit {
+  position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
+  color: var(--muted); font-size: .75rem; pointer-events: none;
+}
+
+/* ── Mode / channel button strip ───────────────────────────── */
+.mode-strip {
+  display: flex; align-items: center; gap: 4px;
+}
+
+/* Divider between Analog and HD buttons */
+.mode-divider {
+  width: 1px; height: 24px;
+  background: var(--border);
+  margin: 0 4px;
+  flex-shrink: 0;
+}
+
+.mode-btn {
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface2);
+  color: var(--muted);
+  font-size: .78rem; font-weight: 700;
+  padding: 5px 11px;
+  cursor: pointer;
+  transition: all .18s;
+  white-space: nowrap;
+}
+.mode-btn:hover:not(.inactive) { filter: brightness(1.12); }
+
+/* Analog button — green tint */
+.mode-btn.analog-btn { border-color: var(--analog-dim); color: var(--analog); }
+.mode-btn.analog-btn.active {
+  background: var(--analog); border-color: var(--analog);
+  color: #fff; box-shadow: var(--glow-grn);
+}
+.mode-btn.analog-btn:hover:not(.active):not(.inactive) {
+  background: rgba(16,185,129,.12);
+}
+
+/* HD buttons — blue tint */
+.mode-btn.hd-btn { border-color: #1e3a5f; color: var(--muted); }
+.mode-btn.hd-btn.active {
+  background: var(--accent); border-color: var(--accent);
+  color: #fff; box-shadow: var(--glow-blue);
+}
+.mode-btn.hd-btn.available {
+  border-color: var(--accent); color: var(--accent);
+}
+.mode-btn.hd-btn:hover:not(.active):not(.inactive) {
+  background: rgba(59,130,246,.12);
+}
+.mode-btn.inactive { opacity: .3; cursor: not-allowed; }
+
+/* ── Generic buttons ─────────────────────────────────────────── */
+.btn {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 7px 14px;
+  border: none; border-radius: var(--radius-sm);
+  font-size: .85rem; font-weight: 600; cursor: pointer;
+  transition: filter .15s, opacity .15s; white-space: nowrap;
+}
+.btn:hover   { filter: brightness(1.12); }
+.btn:active  { filter: brightness(.9); }
+.btn-primary { background: var(--accent); color: #fff; }
+.btn-danger  { background: var(--danger); color: #fff; }
+.btn-ghost   { background: var(--surface3); color: var(--text);
+               border: 1px solid var(--border); }
+.btn:disabled { opacity: .35; cursor: default; filter: none; }
+
+.header-actions { display: flex; gap: 6px; margin-left: auto; }
+
+/* ── Main layout ─────────────────────────────────────────────── */
+.main { flex: 1; display: flex; overflow: hidden; }
+
+/* ── Player ──────────────────────────────────────────────────── */
+.player {
+  flex: 1; display: flex; flex-direction: column;
+  padding: 24px 28px; gap: 22px; min-width: 0;
+}
+
+/* ── Idle hint ───────────────────────────────────────────────── */
+.idle-hint {
+  flex: 1; display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  color: var(--muted); gap: 14px; text-align: center;
+}
+.idle-hint svg { opacity: .25; }
+.idle-hint p { font-size: .95rem; max-width: 300px; line-height: 1.6; }
+
+/* ── Now playing ─────────────────────────────────────────────── */
+.now-playing { display: flex; gap: 24px; align-items: flex-start; }
+
+.art-wrap {
+  flex-shrink: 0; width: 192px; height: 192px;
+  border-radius: var(--radius);
+  background: var(--surface2); border: 1px solid var(--border);
+  overflow: hidden; display: flex; align-items: center; justify-content: center;
+  position: relative;
+}
+.art-wrap img { width: 100%; height: 100%; object-fit: cover; display: none; }
+.art-wrap img.visible { display: block; }
+
+.art-callsign {
+  font-size: 2.4rem; font-weight: 800; color: var(--accent);
+  letter-spacing: .05em; text-align: center; padding: 10px;
+  line-height: 1.15; word-break: break-all;
+  display: flex; align-items: center; justify-content: center;
+  height: 100%; width: 100%;
+}
+.art-callsign.analog { color: var(--analog); }
+.art-callsign.hidden { display: none; }
+
+.primary-info {
+  flex: 1; display: flex; flex-direction: column;
+  gap: 6px; padding-top: 2px; min-width: 0;
+}
+.station-name {
+  font-size: 1.85rem; font-weight: 800; color: var(--text);
+  line-height: 1.1; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis;
+}
+.station-freq { font-size: 1rem; font-weight: 600; color: var(--accent); }
+.station-freq.analog { color: var(--analog); }
+.station-slogan {
+  font-size: .82rem; color: var(--muted); font-style: italic;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  min-height: 1em;
+}
+.track-title {
+  font-size: 1.25rem; font-weight: 700; color: var(--text);
+  margin-top: 8px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.track-artist {
+  font-size: .95rem; color: var(--muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.track-album {
+  font-size: .82rem; color: var(--muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* ── Sync / status pill ──────────────────────────────────────── */
+.sync-pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 11px; border-radius: 999px;
+  font-size: .72rem; font-weight: 700;
+  background: var(--surface3); color: var(--muted);
+  width: fit-content; margin-top: 10px;
+}
+.sync-pill.synced { background: rgba(34,197,94,.13); color: var(--success); }
+.sync-pill.analog-live { background: rgba(16,185,129,.13); color: var(--analog); }
+.sync-pill .dot {
+  width: 7px; height: 7px; border-radius: 50%; background: currentColor;
+  flex-shrink: 0;
+}
+.sync-pill.synced .dot,
+.sync-pill.analog-live .dot { animation: pulse 1.5s ease-in-out infinite; }
+@keyframes pulse {
+  0%,100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: .45; transform: scale(.7); }
+}
+
+/* ── Telemetry ───────────────────────────────────────────────── */
+.telemetry { display: flex; gap: 12px; flex-wrap: wrap; }
+.telem-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 11px 14px;
+  flex: 1; min-width: 110px;
+}
+.telem-label {
+  font-size: .67rem; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .08em;
+  color: var(--muted); margin-bottom: 4px;
+}
+.telem-value { font-size: 1.05rem; font-weight: 700; color: var(--text); }
+.telem-value.good { color: var(--success); }
+.telem-value.warn { color: var(--warn); }
+.telem-value.bad  { color: var(--danger); }
+.telem-unit { font-size: .72rem; color: var(--muted); margin-left: 2px; }
+
+/* Signal bars */
+.signal-bar-wrap {
+  display: flex; gap: 3px; align-items: flex-end;
+  height: 20px; margin-top: 2px;
+}
+.signal-bar-wrap .bar {
+  width: 6px; border-radius: 2px;
+  background: var(--surface3); transition: background .4s;
+}
+.signal-bar-wrap .bar.lit     { background: var(--success); }
+.signal-bar-wrap .bar.lit.mid { background: var(--warn); }
+.signal-bar-wrap .bar.lit.low { background: var(--danger); }
+.bar:nth-child(1){height:4px} .bar:nth-child(2){height:7px}
+.bar:nth-child(3){height:10px} .bar:nth-child(4){height:13px}
+.bar:nth-child(5){height:16px} .bar:nth-child(6){height:20px}
+
+/* ── RDS badge ───────────────────────────────────────────────── */
+.rds-badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  background: rgba(16,185,129,.1); border: 1px solid rgba(16,185,129,.3);
+  border-radius: 4px; padding: 2px 7px;
+  font-size: .68rem; font-weight: 700; color: var(--analog);
+  letter-spacing: .06em;
+}
+
+/* ── Presets drawer ──────────────────────────────────────────── */
+.presets-drawer {
+  width: 0; overflow: hidden; transition: width .3s ease;
+  background: var(--surface); border-left: 1px solid var(--border);
+  display: flex; flex-direction: column;
+}
+.presets-drawer.open { width: 290px; }
+
+.drawer-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 14px 11px; border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.drawer-title {
+  font-size: .85rem; font-weight: 700; color: var(--text);
+  text-transform: uppercase; letter-spacing: .08em;
+}
+.drawer-close {
+  background: none; border: none; color: var(--muted);
+  cursor: pointer; font-size: 1rem; padding: 2px 5px;
+  border-radius: 4px; line-height: 1;
+}
+.drawer-close:hover { color: var(--text); background: var(--surface3); }
+
+.presets-list {
+  flex: 1; overflow-y: auto;
+  padding: 8px 10px; display: flex; flex-direction: column; gap: 5px;
+}
+.preset-item {
+  display: flex; align-items: center;
+  background: var(--surface2); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 9px 10px; gap: 8px;
+  cursor: pointer; transition: border-color .15s, background .15s;
+  user-select: none;
+}
+.preset-item:hover { border-color: var(--accent); background: var(--surface3); }
+.preset-item.is-analog:hover { border-color: var(--analog); }
+
+.preset-mode-dot {
+  width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+}
+.preset-mode-dot.analog { background: var(--analog); }
+.preset-mode-dot.hd     { background: var(--accent); }
+
+.preset-text { flex: 1; min-width: 0; }
+.preset-callsign {
+  font-size: .88rem; font-weight: 700; color: var(--text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.preset-meta { font-size: .72rem; color: var(--muted); }
+
+.preset-del {
+  background: none; border: none; color: var(--muted);
+  cursor: pointer; font-size: .9rem; padding: 2px 4px;
+  border-radius: 4px; flex-shrink: 0; transition: color .15s, background .15s;
+}
+.preset-del:hover { color: var(--danger); background: rgba(239,68,68,.1); }
+.presets-empty {
+  color: var(--muted); font-size: .82rem;
+  text-align: center; padding: 22px 8px; line-height: 1.6;
+}
+
+/* ── Toast ───────────────────────────────────────────────────── */
+#toast {
+  position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%);
+  background: #2a1515; border: 1px solid var(--danger);
+  color: #fca5a5; border-radius: var(--radius-sm);
+  padding: 9px 18px; font-size: .88rem;
+  opacity: 0; transition: opacity .3s; pointer-events: none;
+  z-index: 999; max-width: 400px; text-align: center;
+}
+#toast.show { opacity: 1; }
+
+/* scrollbar */
+::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<!-- ── HEADER ─────────────────────────────────────────────────── -->
+<header>
+  <div class="logo">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+         stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M3 18v-6a9 9 0 0 1 18 0v6"/>
+      <path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3z
+               M3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/>
+    </svg>
+    HD Radio
+  </div>
+
+  <!-- Frequency -->
+  <div class="freq-wrap">
+    <input id="freqInput" type="number" min="87.5" max="107.9"
+           step="0.2" placeholder="107.1" inputmode="decimal"/>
+    <span class="freq-unit">MHz</span>
+  </div>
+
+  <!-- Mode strip: [Analog] | [HD1][HD2][HD3][HD4] -->
+  <div class="mode-strip">
+    <button class="mode-btn analog-btn" id="analogBtn" data-mode="analog">
+      Analog
+    </button>
+    <div class="mode-divider"></div>
+    <button class="mode-btn hd-btn active" data-mode="hd" data-ch="0">HD1</button>
+    <button class="mode-btn hd-btn inactive" data-mode="hd" data-ch="1">HD2</button>
+    <button class="mode-btn hd-btn inactive" data-mode="hd" data-ch="2">HD3</button>
+    <button class="mode-btn hd-btn inactive" data-mode="hd" data-ch="3">HD4</button>
+  </div>
+
+  <!-- Tune + actions -->
+  <button class="btn btn-primary" id="tuneBtn">
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+      <polygon points="5 3 19 12 5 21 5 3"/>
+    </svg>
+    Tune
+  </button>
+
+  <div class="header-actions">
+    <button class="btn btn-ghost" id="savePresetBtn" disabled title="Save preset">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="2.5">
+        <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+        <polyline points="17 21 17 13 7 13 7 21"/>
+        <polyline points="7 3 7 8 15 8"/>
+      </svg>
+      Save
+    </button>
+    <button class="btn btn-ghost" id="presetsToggle">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="2">
+        <line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/>
+        <line x1="8" y1="18" x2="21" y2="18"/>
+        <line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/>
+        <line x1="3" y1="18" x2="3.01" y2="18"/>
+      </svg>
+      Presets
+    </button>
+    <button class="btn btn-danger" id="stopBtn" disabled>
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+        <rect x="6" y="6" width="12" height="12"/>
+      </svg>
+      Stop
+    </button>
+  </div>
+</header>
+
+<!-- ── MAIN ───────────────────────────────────────────────────── -->
+<div class="main">
+
+  <!-- Player -->
+  <div class="player">
+
+    <!-- Idle -->
+    <div class="idle-hint" id="idleHint">
+      <svg width="60" height="60" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="1" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3 18v-6a9 9 0 0 1 18 0v6"/>
+        <path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3z
+                 M3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/>
+      </svg>
+      <p>Enter a frequency, choose <strong>Analog</strong> or an <strong>HD</strong> channel,
+         then press <strong>Tune</strong>.</p>
+    </div>
+
+    <!-- Now playing (hidden until tuned) -->
+    <div id="nowPlayingSection" style="display:none;flex-direction:column;gap:22px;">
+
+      <div class="now-playing">
+        <!-- Art / callsign -->
+        <div class="art-wrap">
+          <img id="albumArt" alt="Album Art"/>
+          <div class="art-callsign" id="artCallsign">—</div>
+        </div>
+
+        <!-- Primary info -->
+        <div class="primary-info">
+          <div class="station-name" id="stationName">—</div>
+          <div class="station-freq" id="stationFreq">—</div>
+          <div class="station-slogan" id="stationSlogan"></div>
+
+          <!-- RDS badge (analog only) -->
+          <div id="rdsBadge" style="display:none">
+            <span class="rds-badge">RDS</span>
+          </div>
+
+          <div class="track-title" id="trackTitle">Waiting for data…</div>
+          <div class="track-artist" id="trackArtist"></div>
+          <div class="track-album" id="trackAlbum"></div>
+
+          <div class="sync-pill" id="syncPill">
+            <span class="dot"></span>
+            <span id="syncLabel">Acquiring…</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Telemetry -->
+      <div class="telemetry">
+        <!-- Signal — label & content change by mode -->
+        <div class="telem-card">
+          <div class="telem-label" id="sigLabel">Signal (MER)</div>
+          <div class="signal-bar-wrap" id="signalBars">
+            <div class="bar"></div><div class="bar"></div><div class="bar"></div>
+            <div class="bar"></div><div class="bar"></div><div class="bar"></div>
+          </div>
+          <div style="margin-top:4px">
+            <span class="telem-value" id="sigValue">—</span>
+            <span class="telem-unit" id="sigUnit">dB</span>
+          </div>
+        </div>
+
+        <!-- BER (HD only) / Modulation (analog placeholder) -->
+        <div class="telem-card" id="berCard">
+          <div class="telem-label">Bit Error Rate</div>
+          <div class="telem-value" id="berValue">—</div>
+        </div>
+
+        <!-- Gain / audio info -->
+        <div class="telem-card">
+          <div class="telem-label">Digital Gain</div>
+          <div class="telem-value" id="gainValue">—</div>
+          <span class="telem-unit">dB</span>
+        </div>
+
+        <!-- Mode / channel badge -->
+        <div class="telem-card">
+          <div class="telem-label">Mode</div>
+          <div class="telem-value" id="modeValue">—</div>
+        </div>
+      </div>
+
+    </div><!-- /nowPlayingSection -->
+  </div><!-- /player -->
+
+  <!-- Presets drawer -->
+  <div class="presets-drawer" id="presetsDrawer">
+    <div class="drawer-header">
+      <span class="drawer-title">Presets</span>
+      <button class="drawer-close" id="drawerClose">✕</button>
+    </div>
+    <div class="presets-list" id="presetsList">
+      <div class="presets-empty">No presets yet.<br/>
+        Tune to a station and click <strong>Save</strong>.</div>
+    </div>
+  </div>
+
+</div><!-- /main -->
+
+<div id="toast"></div>
+
+<script>
+// ── Socket ────────────────────────────────────────────────────
+const socket = io();
+
+// ── App state ─────────────────────────────────────────────────
+let currentState = {};
+let presets      = [];
+let presetsOpen  = false;
+let capabilities = { wfm: true, hd: true };
+
+// Selected mode/channel before tuning
+let selectedMode    = 'hd';
+let selectedProgram = 0;
+
+// ── DOM ───────────────────────────────────────────────────────
+const freqInput     = document.getElementById('freqInput');
+const tuneBtn       = document.getElementById('tuneBtn');
+const stopBtn       = document.getElementById('stopBtn');
+const savePresetBtn = document.getElementById('savePresetBtn');
+const presetsToggle = document.getElementById('presetsToggle');
+const presetsDrawer = document.getElementById('presetsDrawer');
+const drawerClose   = document.getElementById('drawerClose');
+const presetsList   = document.getElementById('presetsList');
+const idleHint      = document.getElementById('idleHint');
+const nowPlaying    = document.getElementById('nowPlayingSection');
+const analogBtn     = document.getElementById('analogBtn');
+const hdBtns        = document.querySelectorAll('.mode-btn.hd-btn');
+const allModeBtns   = document.querySelectorAll('.mode-btn');
+
+const stationName   = document.getElementById('stationName');
+const stationFreq   = document.getElementById('stationFreq');
+const stationSlogan = document.getElementById('stationSlogan');
+const artCallsign   = document.getElementById('artCallsign');
+const albumArt      = document.getElementById('albumArt');
+const trackTitle    = document.getElementById('trackTitle');
+const trackArtist   = document.getElementById('trackArtist');
+const trackAlbum    = document.getElementById('trackAlbum');
+const syncPill      = document.getElementById('syncPill');
+const syncLabel     = document.getElementById('syncLabel');
+const rdsBadge      = document.getElementById('rdsBadge');
+const sigLabel      = document.getElementById('sigLabel');
+const sigValue      = document.getElementById('sigValue');
+const sigUnit       = document.getElementById('sigUnit');
+const signalBars    = document.getElementById('signalBars');
+const berCard       = document.getElementById('berCard');
+const berValue      = document.getElementById('berValue');
+const gainValue     = document.getElementById('gainValue');
+const modeValue     = document.getElementById('modeValue');
+const toast         = document.getElementById('toast');
+
+// ── Mode button selection (pre-tune) ──────────────────────────
+analogBtn.addEventListener('click', () => {
+  if (!capabilities.wfm) {
+    showToast('WFM requires numpy, scipy, and pyrtlsdr — not installed.');
+    return;
+  }
+  selectedMode    = 'analog';
+  selectedProgram = 0;
+  refreshModeButtons();
+
+  // If already tuned, switch mode immediately
+  if (currentState.frequency) switchMode('analog', 0);
+});
+
+hdBtns.forEach(btn => {
+  btn.addEventListener('click', () => {
+    if (btn.classList.contains('inactive')) return;
+    const ch = parseInt(btn.dataset.ch);
+    selectedMode    = 'hd';
+    selectedProgram = ch;
+    refreshModeButtons();
+
+    // If already tuned, switch mode immediately
+    if (currentState.frequency) switchMode('hd', ch);
+  });
+});
+
+function refreshModeButtons(activePrograms) {
+  const active = new Set(activePrograms || (currentState.active_programs || []));
+  const curMode = currentState.mode || selectedMode;
+  const curProg = currentState.program !== undefined ? currentState.program : selectedProgram;
+
+  // Analog button
+  analogBtn.classList.toggle('active', curMode === 'analog');
+
+  // HD buttons
+  hdBtns.forEach(btn => {
+    const ch = parseInt(btn.dataset.ch);
+    btn.classList.remove('active', 'available', 'inactive');
+    if (curMode === 'hd' && ch === curProg) {
+      btn.classList.add('active');
+    } else if (active.has(ch) || !currentState.frequency) {
+      // Before tuning, all HD buttons available; after, only active ones
+      btn.classList.add(currentState.frequency ? 'available' : 'available');
+    } else {
+      btn.classList.add('inactive');
+    }
+  });
+}
+
+function switchMode(mode, program) {
+  socket.emit('set_mode', { mode, program });
+}
+
+// ── Tune ──────────────────────────────────────────────────────
+function tune() {
+  const freq = parseFloat(freqInput.value);
+  if (isNaN(freq) || freq < 87.5 || freq > 108.0) {
+    showToast('Enter a valid FM frequency (87.5 – 108.0 MHz)');
+    return;
+  }
+  socket.emit('tune', {
+    frequency: freq,
+    mode:      selectedMode,
+    program:   selectedProgram,
+    device:    0,
+  });
+  stopBtn.disabled = false;
+  savePresetBtn.disabled = false;
+  revealNowPlaying(freq, selectedMode, selectedProgram);
+}
+
+tuneBtn.addEventListener('click', tune);
+freqInput.addEventListener('keydown', e => { if (e.key === 'Enter') tune(); });
+
+stopBtn.addEventListener('click', () => {
+  socket.emit('stop');
+  stopBtn.disabled = true;
+  savePresetBtn.disabled = true;
+  currentState = {};
+  idleHint.style.display    = 'flex';
+  nowPlaying.style.display  = 'none';
+  refreshModeButtons([]);
+});
+
+// ── Show now-playing shell ────────────────────────────────────
+function revealNowPlaying(freq, mode, program) {
+  idleHint.style.display   = 'none';
+  nowPlaying.style.display = 'flex';
+
+  const isAnalog = mode === 'analog';
+  stationFreq.textContent = `${parseFloat(freq).toFixed(1)} MHz · ${isAnalog ? 'Analog FM' : 'HD' + (program + 1)}`;
+  stationFreq.className   = 'station-freq' + (isAnalog ? ' analog' : '');
+  modeValue.textContent   = isAnalog ? 'Analog FM' : `HD${program + 1}`;
+
+  artCallsign.textContent = parseFloat(freq).toFixed(1);
+  artCallsign.className   = 'art-callsign' + (isAnalog ? ' analog' : '');
+  albumArt.classList.remove('visible');
+  artCallsign.classList.remove('hidden');
+
+  stationName.textContent = '—';
+  stationSlogan.textContent = '';
+  trackTitle.textContent  = 'Waiting for data…';
+  trackArtist.textContent = '';
+  trackAlbum.textContent  = '';
+
+  rdsBadge.style.display  = isAnalog ? 'block' : 'none';
+  berCard.style.display   = isAnalog ? 'none'  : '';
+  sigLabel.textContent    = isAnalog ? 'Signal (dBFS)' : 'Signal (MER)';
+  sigUnit.textContent     = isAnalog ? 'dBFS' : 'dB';
+
+  setSynced(false, mode);
+  resetBars();
+}
+
+// ── Socket events ─────────────────────────────────────────────
+socket.on('capabilities', caps => {
+  capabilities = caps;
+  if (!caps.wfm) {
+    analogBtn.classList.add('inactive');
+    analogBtn.title = 'WFM not available (numpy/scipy/pyrtlsdr missing)';
+  }
+  if (!caps.hd) {
+    hdBtns.forEach(b => { b.classList.add('inactive');
+      b.title = 'HD not available (libnrsc5.dll missing)'; });
+  }
+});
+
+socket.on('presets', data => { presets = data || []; renderPresets(); });
+socket.on('error',   data => showToast(data.message || 'Unknown error'));
+
+socket.on('state', data => {
+  currentState = data;
+  if (!data.frequency) return;
+
+  const isAnalog = data.mode === 'analog';
+
+  // Reveal panel if hidden
+  if (nowPlaying.style.display === 'none') {
+    revealNowPlaying(data.frequency, data.mode, data.program || 0);
+    stopBtn.disabled = false;
+    savePresetBtn.disabled = false;
+  }
+
+  // Station identity
+  const name = data.station_name || (isAnalog ? data.rds_ps : null);
+  stationName.textContent = name || '—';
+  stationFreq.textContent =
+    `${parseFloat(data.frequency).toFixed(1)} MHz · ${isAnalog ? 'Analog FM' : 'HD' + ((data.program || 0) + 1)}`;
+  stationFreq.className = 'station-freq' + (isAnalog ? ' analog' : '');
+
+  const slogan = data.station_slogan || data.rds_rt || '';
+  stationSlogan.textContent = slogan;
+
+  // Art
+  if (data.album_art_b64) {
+    albumArt.src = 'data:image/jpeg;base64,' + data.album_art_b64;
+    albumArt.classList.add('visible');
+    artCallsign.classList.add('hidden');
+  } else {
+    albumArt.classList.remove('visible');
+    artCallsign.classList.remove('hidden');
+    artCallsign.textContent = name || parseFloat(data.frequency).toFixed(1);
+    artCallsign.className   = 'art-callsign' + (isAnalog ? ' analog' : '') +
+                              (albumArt.classList.contains('visible') ? ' hidden' : '');
+  }
+
+  // Track info
+  trackTitle.textContent  = data.title  || (data.synced ? (isAnalog ? 'Analog FM' : 'No track info') : 'Waiting for data…');
+  trackArtist.textContent = data.artist || '';
+  trackAlbum.textContent  = data.album  ? '💿 ' + data.album : '';
+
+  // Mode labels
+  modeValue.textContent = isAnalog ? 'Analog FM' : `HD${(data.program || 0) + 1}`;
+  rdsBadge.style.display  = isAnalog ? 'block' : 'none';
+  berCard.style.display   = isAnalog ? 'none'  : '';
+  sigLabel.textContent    = isAnalog ? 'Signal (dBFS)' : 'Signal (MER)';
+  sigUnit.textContent     = isAnalog ? 'dBFS' : 'dB';
+
+  // Telemetry
+  if (isAnalog) {
+    updateAnalogSignal(data.signal_dbfs);
+  } else {
+    updateMer(data.mer_lower, data.mer_upper);
+    updateBer(data.ber);
+    gainValue.textContent = data.gain != null ? data.gain : '—';
+  }
+
+  setSynced(data.synced, data.mode);
+  refreshModeButtons(data.active_programs);
+});
+
+// ── Sync pill ─────────────────────────────────────────────────
+function setSynced(synced, mode) {
+  syncPill.classList.remove('synced', 'analog-live');
+  if (mode === 'analog' && synced) {
+    syncPill.classList.add('analog-live');
+    syncLabel.textContent = 'Receiving';
+  } else if (synced) {
+    syncPill.classList.add('synced');
+    syncLabel.textContent = 'Locked';
+  } else {
+    syncLabel.textContent = mode === 'analog' ? 'Acquiring…' : 'Acquiring signal…';
+  }
+}
+
+// ── Signal bars ───────────────────────────────────────────────
+function resetBars() {
+  signalBars.querySelectorAll('.bar').forEach(b =>
+    b.classList.remove('lit','mid','low'));
+  sigValue.textContent = '—';
+  sigValue.className   = 'telem-value';
+}
+
+function setBarsPct(pct) {
+  const bars = signalBars.querySelectorAll('.bar');
+  const lit  = Math.round(Math.min(Math.max(pct, 0), 1) * bars.length);
+  bars.forEach((bar, i) => {
+    bar.classList.remove('lit','mid','low');
+    if (i < lit) {
+      bar.classList.add('lit');
+      if (lit <= 2) bar.classList.add('low');
+      else if (lit <= 4) bar.classList.add('mid');
+    }
+  });
+}
+
+function updateMer(lower, upper) {
+  const val = upper != null ? upper : lower;
+  sigValue.textContent = val != null ? val.toFixed(1) : '—';
+  sigValue.className = 'telem-value' + (val == null ? '' : val >= 12 ? ' good' : val >= 6 ? ' warn' : ' bad');
+  setBarsPct(val != null ? val / 30 : 0);
+}
+
+function updateAnalogSignal(dbfs) {
+  // dBFS range: -60 (noise) to 0 (max) — map to 6 bars
+  sigValue.textContent = dbfs != null ? dbfs.toFixed(1) : '—';
+  const pct = dbfs != null ? (dbfs + 60) / 60 : 0;  // -60→0, 0→1
+  sigValue.className = 'telem-value' + (pct > 0.7 ? ' good' : pct > 0.3 ? ' warn' : ' bad');
+  setBarsPct(pct);
+}
+
+function updateBer(ber) {
+  berValue.className = 'telem-value';
+  if (ber == null) { berValue.textContent = '—'; return; }
+  berValue.textContent = ber.toFixed(4);
+  berValue.classList.add(ber < 0.01 ? 'good' : ber < 0.05 ? 'warn' : 'bad');
+}
+
+// ── Presets ───────────────────────────────────────────────────
+savePresetBtn.addEventListener('click', () => {
+  if (!currentState.frequency) return;
+  const isAnalog = currentState.mode === 'analog';
+  socket.emit('save_preset', {
+    frequency: currentState.frequency,
+    program:   currentState.program || 0,
+    mode:      currentState.mode    || 'hd',
+    callsign:  currentState.station_name || currentState.rds_ps ||
+               parseFloat(currentState.frequency).toFixed(1),
+  });
+  showToast('Preset saved!', 'ok');
+});
+
+presetsToggle.addEventListener('click', () => {
+  presetsOpen = !presetsOpen;
+  presetsDrawer.classList.toggle('open', presetsOpen);
+});
+drawerClose.addEventListener('click', () => {
+  presetsOpen = false;
+  presetsDrawer.classList.remove('open');
+});
+
+function renderPresets() {
+  if (!presets.length) {
+    presetsList.innerHTML =
+      '<div class="presets-empty">No presets yet.<br/>' +
+      'Tune to a station and click <strong>Save</strong>.</div>';
+    return;
+  }
+  presetsList.innerHTML = '';
+  presets.forEach((p, idx) => {
+    const isAnalog = p.mode === 'analog';
+    const item = document.createElement('div');
+    item.className = 'preset-item' + (isAnalog ? ' is-analog' : '');
+    item.title = 'Double-click to tune';
+
+    const dot = document.createElement('div');
+    dot.className = 'preset-mode-dot ' + (isAnalog ? 'analog' : 'hd');
+
+    const text = document.createElement('div');
+    text.className = 'preset-text';
+    const label = isAnalog ? 'Analog FM' : `HD${(p.program || 0) + 1}`;
+    text.innerHTML = `
+      <div class="preset-callsign">${esc(p.callsign || p.frequency)}</div>
+      <div class="preset-meta">${parseFloat(p.frequency).toFixed(1)} MHz · ${label}</div>`;
+
+    const del = document.createElement('button');
+    del.className = 'preset-del';
+    del.title = 'Remove';
+    del.textContent = '✕';
+    del.addEventListener('click', e => {
+      e.stopPropagation();
+      socket.emit('delete_preset', { index: idx });
+    });
+
+    item.append(dot, text, del);
+
+    item.addEventListener('dblclick', () => {
+      freqInput.value = parseFloat(p.frequency).toFixed(1);
+      selectedMode    = p.mode    || 'hd';
+      selectedProgram = p.program || 0;
+      refreshModeButtons([]);
+      socket.emit('tune', {
+        frequency: parseFloat(p.frequency),
+        mode:      selectedMode,
+        program:   selectedProgram,
+        device:    0,
+      });
+      stopBtn.disabled = false;
+      savePresetBtn.disabled = false;
+      revealNowPlaying(p.frequency, selectedMode, selectedProgram);
+    });
+
+    presetsList.appendChild(item);
+  });
+}
+
+// ── Toast ─────────────────────────────────────────────────────
+let toastTimer;
+function showToast(msg, type = 'error') {
+  const ok = type === 'ok';
+  toast.textContent   = msg;
+  toast.style.background  = ok ? 'rgba(16,185,129,.12)' : '#2a1515';
+  toast.style.borderColor = ok ? 'var(--analog)' : 'var(--danger)';
+  toast.style.color       = ok ? '#6ee7b7' : '#fca5a5';
+  toast.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toast.classList.remove('show'), 3200);
+}
+
+// ── Util ──────────────────────────────────────────────────────
+function esc(s) {
+  return String(s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// Init
+refreshModeButtons([]);
+</script>
+</body>
+</html>
